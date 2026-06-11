@@ -1,4 +1,5 @@
 """Base runner for off-policy algorithms."""
+import json
 import os
 import time
 import torch
@@ -57,6 +58,10 @@ class OffPolicyBaseRunner:
                 algo_args["seed"]["seed"],
                 logger_path=algo_args["logger"]["log_dir"],
             )
+            self.best_save_dir = os.path.join(self.run_dir, "best_models")
+            os.makedirs(self.best_save_dir, exist_ok=True)
+            self.best_eval_reward = -np.inf
+            self.best_eval_step = None
             save_config(args, algo_args, env_args, self.run_dir)
             self.log_file = open(
                 os.path.join(self.run_dir, "progress.txt"), "w", encoding="utf-8"
@@ -285,7 +290,28 @@ class OffPolicyBaseRunner:
                     print(
                         f"Env {self.args['env']} Task {self.task_name} Algo {self.args['algo']} Exp {self.args['exp_name']} Evaluation at step {cur_step} / {self.algo_args['train']['num_env_steps']}:"
                     )
-                    self.eval(cur_step)
+                    eval_avg_rew = self.eval(cur_step)
+                    if eval_avg_rew > self.best_eval_reward:
+                        self.best_eval_reward = eval_avg_rew
+                        self.best_eval_step = cur_step
+                        self.save(self.best_save_dir)
+                        with open(
+                            os.path.join(self.run_dir, "best_checkpoint.json"),
+                            "w",
+                            encoding="utf-8",
+                        ) as file:
+                            json.dump(
+                                {
+                                    "eval_average_episode_reward": float(
+                                        self.best_eval_reward
+                                    ),
+                                    "step": int(self.best_eval_step),
+                                    "model_dir": "best_models",
+                                },
+                                file,
+                                indent=2,
+                            )
+                            file.write("\n")
                 else:
                     print(
                         f"Env {self.args['env']} Task {self.task_name} Algo {self.args['algo']} Exp {self.args['exp_name']} Step {cur_step} / {self.algo_args['train']['num_env_steps']}, average step reward in buffer: {self.buffer.get_mean_rewards()}.\n"
@@ -303,6 +329,7 @@ class OffPolicyBaseRunner:
                         self.log_file.flush()
                         self.done_episodes_rewards = []
                 self.save()
+        self.save()
 
     def warmup(self):
         """Warmup the replay buffer with random actions"""
@@ -528,7 +555,7 @@ class OffPolicyBaseRunner:
             eval_score_cnt = 0
         episode_lens = []
         one_episode_len = np.zeros(
-            self.algo_args["eval"]["n_eval_rollout_threads"], dtype=np.int
+            self.algo_args["eval"]["n_eval_rollout_threads"], dtype=int
         )
 
         eval_obs, eval_share_obs, eval_available_actions = self.eval_envs.reset()
@@ -636,7 +663,7 @@ class OffPolicyBaseRunner:
                 self.writter.add_scalar(
                     "eval_average_episode_length", eval_avg_len, step
                 )
-                break
+                return float(eval_avg_rew)
 
     @torch.no_grad()
     def render(self):
@@ -721,15 +748,16 @@ class OffPolicyBaseRunner:
                 )
                 self.value_normalizer.load_state_dict(value_normalizer_state_dict)
 
-    def save(self):
+    def save(self, save_dir=None):
         """Save the model"""
+        save_dir = save_dir or self.save_dir
         for agent_id in range(self.num_agents):
-            self.actor[agent_id].save(self.save_dir, agent_id)
-        self.critic.save(self.save_dir)
+            self.actor[agent_id].save(save_dir, agent_id)
+        self.critic.save(save_dir)
         if self.value_normalizer is not None:
             torch.save(
                 self.value_normalizer.state_dict(),
-                str(self.save_dir) + "/value_normalizer" + ".pt",
+                str(save_dir) + "/value_normalizer" + ".pt",
             )
 
     def close(self):

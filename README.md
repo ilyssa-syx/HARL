@@ -45,6 +45,52 @@ pip install -e .
 
 Along with HARL algorithms, we also implement the interfaces for seven common environments ([SMAC](https://github.com/oxwhirl/smac), [SMACv2](https://github.com/oxwhirl/smacv2), [MAMuJoCo](https://github.com/schroederdewitt/multiagent_mujoco), [MPE](https://pettingzoo.farama.org/environments/mpe/), [Google Research Football](https://github.com/google-research/football), [Bi-DexterousHands](https://github.com/PKU-MARL/DexterousHands), [Light Aircraft Game](https://github.com/liuqh16/CloseAirCombat)) and they can be used directly. (We also implement the interface for [Gym](https://www.gymlibrary.dev/). Gym is a single-agent environment, which can be seen as a special case of multi-agent environments. It is included mainly for reference purposes.) You may choose to install the dependencies to the environments you want to use. **After the installation, please follow the steps in the ["Solve Dependencies"](https://github.com/PKU-MARL/HARL?tab=readme-ov-file#solve-dependencies) section.**
 
+**Install Overcooked**
+
+The Overcooked adapter reuses the Overcooked-AI checkout bundled with the
+neighboring PantheonRL repository:
+
+```shell
+conda create -n harl-overcooked python=3.8
+conda activate harl-overcooked
+pip install pip==24.0
+pip install setuptools==65.5.0 "wheel<0.40.0"
+pip install -r requirements-overcooked.txt
+pip install -e .
+pip install -e /workspace/PantheonRL/overcookedgym/human_aware_rl/overcooked_ai
+```
+
+Run a short end-to-end check before starting the full experiment matrix:
+
+```shell
+python -m unittest tests.test_overcooked_env
+python examples/run_overcooked_had3qn.py \
+  --smoke-test \
+  --output-dir results/overcooked_smoke
+```
+
+The formal matrix uses five layouts, three seeds, the default HAD3QN
+hyperparameters, and 1,000,000 training environment steps per run:
+
+```shell
+python examples/run_overcooked_had3qn.py --output-dir results
+```
+
+HARL collects its default 10,000 warmup transitions before the configured
+`num_env_steps`, so a formal run performs 1,010,000 environment interactions
+in total.
+
+Each completed run is followed by a 100-episode deterministic evaluation of
+`best_models/`. The latest/final checkpoint remains in `models/`. To re-evaluate
+one run or summarize it alongside PantheonRL DQN results:
+
+```shell
+python examples/evaluate_overcooked_had3qn.py --run-dir <run-directory>
+python examples/summarize_overcooked_results.py \
+  --harl-root results \
+  --pantheon-root /workspace/PantheonRL/results
+```
+
 **Install Dependencies of Bi-DexterousHands**
 
 Bi-DexterousHands depend on IsaacGym. The hardware requirements of IsaacGym has to be satisfied. To install IsaacGym, download IsaacGym Preview 4 release from [its official website](https://developer.nvidia.com/isaac-gym/download). Then run `pip install -e .` under its `python` folder.

@@ -40,8 +40,9 @@ def main():
             "dexhands",
             "smacv2",
             "lag",
+            "overcooked",
         ],
-        help="Environment name. Choose from: smac, mamujoco, pettingzoo_mpe, gym, football, dexhands, smacv2, lag.",
+        help="Environment name. Choose from: smac, mamujoco, pettingzoo_mpe, gym, football, dexhands, smacv2, lag, overcooked.",
     )
     parser.add_argument(
         "--exp_name", type=str, default="installtest", help="Experiment name."
