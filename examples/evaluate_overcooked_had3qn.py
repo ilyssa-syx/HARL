@@ -20,9 +20,11 @@ def parse_args():
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument(
         "--checkpoint",
-        choices=("best", "latest"),
-        default="best",
-        help="Evaluate best_models or the latest/final models checkpoint.",
+        default="final",
+        help=(
+            "Evaluate best, final/latest, or a periodic checkpoint directory "
+            "name such as step_0070000."
+        ),
     )
     parser.add_argument("--episodes", type=int, default=100)
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
@@ -108,6 +110,8 @@ def write_results(output, results):
                 "episode",
                 "total_return",
                 "sparse_return",
+                "built_in_shaped_return",
+                "custom_shaped_return",
                 "shaped_return",
                 "deliveries",
             ]
@@ -118,6 +122,8 @@ def write_results(output, results):
                     episode_index,
                     episode["total_return"],
                     episode["sparse_return"],
+                    episode["built_in_shaped_return"],
+                    episode["custom_shaped_return"],
                     episode["shaped_return"],
                     episode["deliveries"],
                 ]
@@ -136,12 +142,16 @@ def main():
     config = load_config(args.run_dir)
     env_args = config["env_args"]
     device = resolve_device(args.device)
-    model_dir = args.run_dir / (
-        "best_models" if args.checkpoint == "best" else "models"
-    )
+    checkpoint = "final" if args.checkpoint == "latest" else args.checkpoint
+    if checkpoint == "best":
+        model_dir = args.run_dir / "best_models"
+    elif checkpoint == "final":
+        model_dir = args.run_dir / "models"
+    else:
+        model_dir = args.run_dir / "checkpoints" / checkpoint
     if not model_dir.is_dir():
         raise FileNotFoundError(
-            f"{args.checkpoint} checkpoint directory does not exist: {model_dir}"
+            f"{checkpoint} checkpoint directory does not exist: {model_dir}"
         )
     env = OvercookedEnv(env_args)
     env.seed(config["algo_args"]["seed"]["seed"])
@@ -151,7 +161,14 @@ def main():
     finally:
         env.close()
 
-    metric_keys = ("total_return", "sparse_return", "shaped_return", "deliveries")
+    metric_keys = (
+        "total_return",
+        "sparse_return",
+        "built_in_shaped_return",
+        "custom_shaped_return",
+        "shaped_return",
+        "deliveries",
+    )
     metric_values = {
         metric: [episode[metric] for episode in episodes] for metric in metric_keys
     }
@@ -164,15 +181,24 @@ def main():
         "layout": env_args["layout_name"],
         "seed": config["algo_args"]["seed"]["seed"],
         "run_dir": str(args.run_dir),
-        "checkpoint": args.checkpoint,
+        "checkpoint": checkpoint,
         "model_dir": str(model_dir),
         "episodes": args.episodes,
         "deterministic": True,
         "device": str(device),
         "training_num_env_steps": config["algo_args"]["train"]["num_env_steps"],
+        "training_warmup_steps": config["algo_args"]["train"]["warmup_steps"],
+        "training_total_env_steps": (
+            config["algo_args"]["train"]["num_env_steps"]
+            + config["algo_args"]["train"]["warmup_steps"]
+        ),
         "episode_results": episodes,
         "episode_returns": metric_values["total_return"],
         "episode_sparse_returns": metric_values["sparse_return"],
+        "episode_built_in_shaped_returns": metric_values[
+            "built_in_shaped_return"
+        ],
+        "episode_custom_shaped_returns": metric_values["custom_shaped_return"],
         "episode_shaped_returns": metric_values["shaped_return"],
         "episode_deliveries": metric_values["deliveries"],
         "summary": summary,
@@ -182,6 +208,8 @@ def main():
         "min_return": summary["total_return"]["min"],
         "max_return": summary["total_return"]["max"],
         "mean_sparse_return": summary["sparse_return"]["mean"],
+        "mean_built_in_shaped_return": summary["built_in_shaped_return"]["mean"],
+        "mean_custom_shaped_return": summary["custom_shaped_return"]["mean"],
         "mean_shaped_return": summary["shaped_return"]["mean"],
         "mean_deliveries": summary["deliveries"]["mean"],
     }

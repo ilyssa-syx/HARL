@@ -1,3 +1,5 @@
-layout_name: simple
+layout_name: random0
 horizon: 400
 state_type: EP
+custom_dense_reward: true
+custom_shaping_scale: 2.0

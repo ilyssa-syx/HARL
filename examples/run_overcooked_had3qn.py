@@ -1,4 +1,4 @@
-"""Run the reproducible HARL HAD3QN Overcooked experiment matrix."""
+"""Run the fair-comparison HARL HAD3QN Overcooked experiment matrix."""
 
 import argparse
 import json
@@ -10,6 +10,10 @@ import sys
 
 DEFAULT_LAYOUTS = ["simple", "unident_s", "random1", "random0", "random3"]
 DEFAULT_SEEDS = [0, 1, 2]
+DEFAULT_TOTAL_ENV_STEPS = 500_000
+DEFAULT_WARMUP_STEPS = 50_000
+DEFAULT_GAMMA = 0.99
+DEFAULT_EPSILON = 0.05
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -19,7 +23,18 @@ def parse_args():
     )
     parser.add_argument("--layouts", nargs="+", default=DEFAULT_LAYOUTS)
     parser.add_argument("--seeds", nargs="+", type=int, default=DEFAULT_SEEDS)
-    parser.add_argument("--num-env-steps", type=int, default=1_000_000)
+    parser.add_argument(
+        "--total-env-steps",
+        type=int,
+        default=DEFAULT_TOTAL_ENV_STEPS,
+        help="Total environment interactions, including random warmup.",
+    )
+    parser.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=DEFAULT_WARMUP_STEPS,
+        help="Random replay-buffer warmup interactions included in the total budget.",
+    )
     parser.add_argument("--episodes", type=int, default=100)
     parser.add_argument("--output-dir", type=Path, default=Path("results"))
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
@@ -46,19 +61,32 @@ def write_json(path, value):
         file.write("\n")
 
 
-def matching_completed_run(output_dir, layout, exp_name, seed, num_env_steps):
+def matching_completed_run(
+    output_dir,
+    layout,
+    exp_name,
+    seed,
+    total_env_steps,
+    warmup_steps,
+    training_env_steps,
+):
     root = output_dir / "overcooked" / layout / "had3qn" / exp_name
     candidates = sorted(root.glob(f"seed-{seed:05d}-*"), reverse=True)
     for run_dir in candidates:
         status = load_json(run_dir / "training_status.json", {})
         config = load_json(run_dir / "config.json", {})
-        configured_steps = (
-            config.get("algo_args", {}).get("train", {}).get("num_env_steps")
-        )
+        algo_args = config.get("algo_args", {})
+        train_args = algo_args.get("train", {})
+        had3qn_args = algo_args.get("algo", {})
         if (
             status.get("status") == "completed"
-            and configured_steps == num_env_steps
-            and (run_dir / "best_models").is_dir()
+            and train_args.get("num_env_steps") == training_env_steps
+            and train_args.get("warmup_steps") == warmup_steps
+            and training_env_steps + warmup_steps == total_env_steps
+            and had3qn_args.get("gamma") == DEFAULT_GAMMA
+            and had3qn_args.get("epsilon") == DEFAULT_EPSILON
+            and algo_args.get("eval", {}).get("use_eval") is False
+            and (run_dir / "models").is_dir()
         ):
             return run_dir
     return None
@@ -72,7 +100,7 @@ def newest_run(output_dir, layout, exp_name, seed):
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
-def training_command(args, layout, seed, exp_name, num_env_steps):
+def training_command(args, layout, seed, exp_name, training_env_steps, warmup_steps):
     command = [
         sys.executable,
         str(PROJECT_ROOT / "examples" / "train.py"),
@@ -87,7 +115,15 @@ def training_command(args, layout, seed, exp_name, num_env_steps):
         "--seed",
         str(seed),
         "--num_env_steps",
-        str(num_env_steps),
+        str(training_env_steps),
+        "--warmup_steps",
+        str(warmup_steps),
+        "--gamma",
+        str(DEFAULT_GAMMA),
+        "--epsilon",
+        str(DEFAULT_EPSILON),
+        "--use_eval",
+        "False",
         "--log_dir",
         str(args.output_dir.resolve()),
     ]
@@ -99,20 +135,12 @@ def training_command(args, layout, seed, exp_name, num_env_steps):
         command += [
             "--n_rollout_threads",
             "1",
-            "--warmup_steps",
-            "40",
             "--train_interval",
             "10",
-            "--eval_interval",
-            "20",
             "--buffer_size",
             "1000",
             "--batch_size",
             "32",
-            "--n_eval_rollout_threads",
-            "1",
-            "--eval_episodes",
-            "2",
             "--horizon",
             "40",
         ]
@@ -126,7 +154,7 @@ def evaluation_command(args, run_dir):
         "--run-dir",
         str(run_dir),
         "--checkpoint",
-        "best",
+        "final",
         "--episodes",
         str(args.episodes),
         "--device",
@@ -138,17 +166,33 @@ def evaluation_command(args, run_dir):
 def evaluation_is_current(args, run_dir):
     evaluation = load_json(run_dir / "evaluation.json", {})
     return (
-        evaluation.get("checkpoint") == "best"
+        evaluation.get("checkpoint") == "final"
         and evaluation.get("episodes") == args.episodes
     )
 
 
-def run_one(args, layout, seed, exp_name, num_env_steps):
+def run_one(
+    args,
+    layout,
+    seed,
+    exp_name,
+    total_env_steps,
+    warmup_steps,
+    training_env_steps,
+):
     run_dir = matching_completed_run(
-        args.output_dir, layout, exp_name, seed, num_env_steps
+        args.output_dir,
+        layout,
+        exp_name,
+        seed,
+        total_env_steps,
+        warmup_steps,
+        training_env_steps,
     )
     if run_dir is None:
-        command = training_command(args, layout, seed, exp_name, num_env_steps)
+        command = training_command(
+            args, layout, seed, exp_name, training_env_steps, warmup_steps
+        )
         subprocess.run(command, cwd=PROJECT_ROOT, check=True)
         run_dir = newest_run(args.output_dir, layout, exp_name, seed)
         write_json(
@@ -159,7 +203,12 @@ def run_one(args, layout, seed, exp_name, num_env_steps):
                 "algo": "had3qn",
                 "layout": layout,
                 "seed": seed,
-                "num_env_steps": num_env_steps,
+                "total_env_steps": total_env_steps,
+                "warmup_steps": warmup_steps,
+                "training_env_steps": training_env_steps,
+                "gamma": DEFAULT_GAMMA,
+                "epsilon": DEFAULT_EPSILON,
+                "checkpoint": "final",
                 "command": command,
             },
         )
@@ -171,21 +220,42 @@ def run_one(args, layout, seed, exp_name, num_env_steps):
 
 def main():
     args = parse_args()
-    if args.num_env_steps <= 0 or args.episodes <= 0:
-        raise ValueError("Step and episode counts must be positive")
+    if args.total_env_steps <= 0 or args.episodes <= 0:
+        raise ValueError("Total steps and episode counts must be positive")
+    if args.warmup_steps < 0:
+        raise ValueError("Warmup steps must be non-negative")
+    if args.warmup_steps >= args.total_env_steps:
+        raise ValueError("Warmup steps must be less than total environment steps")
+
     if args.smoke_test:
         args.layouts = args.layouts[:1]
         args.seeds = args.seeds[:1]
-        num_env_steps = min(args.num_env_steps, 200)
-        exp_name = f"smoke_steps_{num_env_steps}"
-        status_path = args.output_dir / "overcooked_had3qn_smoke_status.json"
+        total_env_steps = min(args.total_env_steps, 200)
+        warmup_steps = min(args.warmup_steps, 40)
+        exp_name = f"fair_smoke_total_steps_{total_env_steps}"
+        status_path = args.output_dir / "overcooked_had3qn_fair_smoke_status.json"
     else:
-        num_env_steps = args.num_env_steps
-        exp_name = f"steps_{num_env_steps}"
-        status_path = args.output_dir / "overcooked_had3qn_batch_status.json"
+        total_env_steps = args.total_env_steps
+        warmup_steps = args.warmup_steps
+        exp_name = f"fair_total_steps_{total_env_steps}"
+        status_path = args.output_dir / "overcooked_had3qn_fair_batch_status.json"
+    training_env_steps = total_env_steps - warmup_steps
 
     status = load_json(status_path, {"runs": {}})
-    status.update({"started_at": status.get("started_at", utc_now()), "status": "running"})
+    status.update(
+        {
+            "started_at": status.get("started_at", utc_now()),
+            "status": "running",
+            "protocol": {
+                "total_env_steps": total_env_steps,
+                "warmup_steps": warmup_steps,
+                "training_env_steps": training_env_steps,
+                "gamma": DEFAULT_GAMMA,
+                "epsilon": DEFAULT_EPSILON,
+                "checkpoint": "final",
+            },
+        }
+    )
     write_json(status_path, status)
 
     failures = 0
@@ -193,7 +263,15 @@ def main():
         for seed in args.seeds:
             key = f"{layout}/seed_{seed}"
             try:
-                run_dir = run_one(args, layout, seed, exp_name, num_env_steps)
+                run_dir = run_one(
+                    args,
+                    layout,
+                    seed,
+                    exp_name,
+                    total_env_steps,
+                    warmup_steps,
+                    training_env_steps,
+                )
                 status["runs"][key] = {
                     "status": "completed",
                     "run_dir": str(run_dir),

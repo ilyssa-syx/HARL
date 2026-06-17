@@ -26,6 +26,10 @@ class HAD3QN(OffPolicyBase):
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.lr)
         self.turn_off_grad()
 
+    def set_epsilon(self, epsilon):
+        """Set the epsilon used for epsilon-greedy rollout actions."""
+        self.epsilon = float(epsilon)
+
     def get_actions(self, obs, epsilon_greedy):
         """Get actions for observations.
         Args:

@@ -27,8 +27,18 @@ class OvercookedEnv:
         self.args = copy.deepcopy(args)
         self.layout_name = self.args["layout_name"]
         self.horizon = int(self.args.get("horizon", 400))
+        self.custom_dense_reward = bool(
+            self.args.get("custom_dense_reward", False)
+        )
+        self.custom_shaping_gamma = float(
+            self.args.get("custom_shaping_gamma", 0.99)
+        )
+        self.custom_shaping_scale = float(
+            self.args.get("custom_shaping_scale", 0.4)
+        )
         self.n_agents = 2
         self._seed = 0
+        self.cumulative_custom_shaped_rewards = 0.0
 
         self.mdp = OvercookedGridworld.from_layout_name(
             layout_name=self.layout_name,
@@ -71,13 +81,82 @@ class OvercookedEnv:
             (self.n_agents, len(Action.ALL_ACTIONS)), dtype=np.float32
         )
 
+    def _get_progress_score(self, state):
+        """Return the highest global task-progress phase present in state."""
+        pot_states = self.mdp.get_pot_states(state)
+        counter_objects = self.mdp.get_counter_objects_dict(state)
+        held_object_names = {
+            player.held_object.name
+            for player in state.players
+            if player.held_object is not None
+        }
+
+        loose_ingredient_exists = bool(
+            held_object_names.intersection(("onion", "tomato"))
+            or counter_objects["onion"]
+            or counter_objects["tomato"]
+        )
+        dish_in_transit = bool(
+            "dish" in held_object_names or counter_objects["dish"]
+        )
+        plated_soup_in_transit = bool(
+            "soup" in held_object_names or counter_objects["soup"]
+        )
+
+        ready_pots = (
+            pot_states["onion"]["ready"] + pot_states["tomato"]["ready"]
+        )
+        cooking_pots = (
+            pot_states["onion"]["cooking"] + pot_states["tomato"]["cooking"]
+        )
+        one_item_pots = (
+            pot_states["onion"]["1_items"] + pot_states["tomato"]["1_items"]
+        )
+        two_item_pots = (
+            pot_states["onion"]["2_items"] + pot_states["tomato"]["2_items"]
+        )
+
+        if plated_soup_in_transit:
+            return 7
+        if ready_pots and dish_in_transit:
+            return 6
+        if ready_pots or (cooking_pots and dish_in_transit):
+            return 5
+        if cooking_pots:
+            return 4
+        if two_item_pots:
+            return 3
+        if one_item_pots:
+            return 2
+        if loose_ingredient_exists:
+            return 1
+        return 0
+
+    def _potential(self, state):
+        return self._get_progress_score(state)
+
+    def _calculate_custom_shaping(self, prev_state, next_state, done):
+        if not self.custom_dense_reward:
+            return 0.0
+        prev_phi = self._potential(prev_state)
+        next_phi = self._potential(next_state)
+        return self.custom_shaping_scale * (
+            self.custom_shaping_gamma * next_phi - prev_phi
+        )
+
     def step(self, actions):
         action_indices = np.asarray(actions).reshape(self.n_agents).astype(int)
         joint_action = tuple(
             Action.INDEX_TO_ACTION[action_index] for action_index in action_indices
         )
+        prev_state = self.env.state.deepcopy()
         next_state, sparse_reward, done, base_info = self.env.step(joint_action)
-        shaped_reward = base_info["shaped_r"]
+        built_in_shaped_reward = float(base_info["shaped_r"])
+        custom_shaped_reward = self._calculate_custom_shaping(
+            prev_state, next_state, done
+        )
+        self.cumulative_custom_shaped_rewards += custom_shaped_reward
+        shaped_reward = built_in_shaped_reward + custom_shaped_reward
         total_reward = sparse_reward + shaped_reward
 
         obs = self._featurize(next_state)
@@ -87,15 +166,21 @@ class OvercookedEnv:
 
         info = {
             "sparse_reward": float(sparse_reward),
+            "built_in_shaped_reward": built_in_shaped_reward,
+            "custom_shaped_reward": float(custom_shaped_reward),
             "shaped_reward": float(shaped_reward),
             "total_reward": float(total_reward),
         }
         if done:
             sparse_return = float(self.env.cumulative_sparse_rewards)
-            shaped_return = float(self.env.cumulative_shaped_rewards)
+            built_in_shaped_return = float(self.env.cumulative_shaped_rewards)
+            custom_shaped_return = float(self.cumulative_custom_shaped_rewards)
+            shaped_return = built_in_shaped_return + custom_shaped_return
             info["episode"] = {
                 "total_return": sparse_return + shaped_return,
                 "sparse_return": sparse_return,
+                "built_in_shaped_return": built_in_shaped_return,
+                "custom_shaped_return": custom_shaped_return,
                 "shaped_return": shaped_return,
                 "deliveries": sparse_return / float(self.mdp.delivery_reward),
                 "length": int(self.env.t),
@@ -106,6 +191,7 @@ class OvercookedEnv:
 
     def reset(self):
         self.env.reset()
+        self.cumulative_custom_shaped_rewards = 0.0
         obs = self._featurize(self.env.state)
         return obs, self._shared_state(obs), self.get_avail_actions()
 

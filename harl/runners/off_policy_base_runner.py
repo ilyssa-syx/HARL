@@ -178,6 +178,7 @@ class OffPolicyBaseRunner:
             self.restore()
 
         self.total_it = 0  # total iteration
+        self.current_epsilon = None
 
         if (
             "auto_alpha" in self.algo_args["algo"].keys()
@@ -234,6 +235,12 @@ class OffPolicyBaseRunner:
             * self.algo_args["train"]["train_interval"]
         )
         for step in range(1, steps + 1):
+            if self.args["algo"] == "had3qn":
+                completed_env_steps = (
+                    self.algo_args["train"]["warmup_steps"]
+                    + (step - 1) * self.algo_args["train"]["n_rollout_threads"]
+                )
+                self.set_had3qn_epsilon(completed_env_steps)
             actions = self.get_actions(
                 obs, available_actions=available_actions, add_random=True
             )
@@ -329,7 +336,87 @@ class OffPolicyBaseRunner:
                         self.log_file.flush()
                         self.done_episodes_rewards = []
                 self.save()
+            cur_step = (
+                self.algo_args["train"]["warmup_steps"]
+                + step * self.algo_args["train"]["n_rollout_threads"]
+            )
+            trained_env_steps = (
+                step * self.algo_args["train"]["n_rollout_threads"]
+            )
+            checkpoint_interval = self.algo_args["train"].get(
+                "checkpoint_interval", 0
+            )
+            if (
+                checkpoint_interval > 0
+                and trained_env_steps % checkpoint_interval == 0
+            ):
+                self.save_periodic_checkpoint(cur_step, trained_env_steps)
         self.save()
+        checkpoint_interval = self.algo_args["train"].get(
+            "checkpoint_interval", 0
+        )
+        final_training_steps = self.algo_args["train"]["num_env_steps"]
+        if (
+            checkpoint_interval > 0
+            and final_training_steps % checkpoint_interval != 0
+        ):
+            self.save_periodic_checkpoint(
+                self.algo_args["train"]["warmup_steps"] + final_training_steps,
+                final_training_steps,
+            )
+
+    def set_had3qn_epsilon(self, completed_env_steps):
+        """Apply a linear HAD3QN epsilon schedule on the total-step timeline."""
+        initial_eps = self.algo_args["algo"].get(
+            "exploration_initial_eps", self.algo_args["algo"]["epsilon"]
+        )
+        final_eps = self.algo_args["algo"]["epsilon"]
+        exploration_fraction = self.algo_args["algo"].get(
+            "exploration_fraction", 0.0
+        )
+        total_env_steps = (
+            self.algo_args["train"]["warmup_steps"]
+            + self.algo_args["train"]["num_env_steps"]
+        )
+        decay_steps = exploration_fraction * total_env_steps
+        if decay_steps <= 0:
+            epsilon = final_eps
+        else:
+            progress = min(max(completed_env_steps / decay_steps, 0.0), 1.0)
+            epsilon = initial_eps + progress * (final_eps - initial_eps)
+        for actor in self.actor:
+            actor.set_epsilon(epsilon)
+        self.current_epsilon = epsilon
+        self.writter.add_scalar(
+            "train/exploration_rate", epsilon, completed_env_steps
+        )
+
+    def save_periodic_checkpoint(self, total_env_steps, training_env_steps):
+        """Save one immutable checkpoint on the diagnostic timeline."""
+        checkpoint_dir = os.path.join(
+            self.run_dir, "checkpoints", f"step_{total_env_steps:07d}"
+        )
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        self.save(checkpoint_dir)
+        with open(
+            os.path.join(checkpoint_dir, "checkpoint.json"),
+            "w",
+            encoding="utf-8",
+        ) as file:
+            json.dump(
+                {
+                    "total_env_steps": int(total_env_steps),
+                    "training_env_steps": int(training_env_steps),
+                    "epsilon": (
+                        float(self.current_epsilon)
+                        if self.current_epsilon is not None
+                        else None
+                    ),
+                },
+                file,
+                indent=2,
+            )
+            file.write("\n")
 
     def warmup(self):
         """Warmup the replay buffer with random actions"""

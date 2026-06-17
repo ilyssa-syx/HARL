@@ -15,7 +15,7 @@ train:
   # number of parallel environments for training data collection
   n_rollout_threads: 20
   # number of total steps
-  num_env_steps: 1000000
+  num_env_steps: 10000000
   # number of warmup steps
   warmup_steps: 10000
   # number of steps per train
@@ -26,6 +26,9 @@ train:
   log_interval: ~
   # evaluation interval
   eval_interval: 1000
+  # independent checkpoint interval measured in total environment interactions;
+  # 0 disables periodic checkpoints
+  checkpoint_interval: 20000
   # whether to use linear learning rate decay
   use_linear_lr_decay: False
   # whether to consider the case of truncation when an episode is done
@@ -65,15 +68,19 @@ model:
   critic_lr: 0.001
 algo:
   # discount factor
-  gamma: 0.95
+  gamma: 0.99
   # off-policy buffer size
   buffer_size: 1000000
   # training batch size
-  batch_size: 1000
+  batch_size: 100
   # coefficient for target model soft update
   polyak: 0.005
   # epsilon-greedy parameter
   epsilon: 0.05
+  # initial epsilon for a linear schedule; set equal to epsilon to disable decay
+  exploration_initial_eps: 1
+  # fraction of total interactions, including warmup, used to decay epsilon
+  exploration_fraction: 0.5
   # the number of steps to look ahead
   n_step: 1
   # whether to share parameter among actors

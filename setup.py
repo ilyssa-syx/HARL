@@ -14,6 +14,7 @@ setup(
         "pyyaml>=5.3.1",
         "tensorboard>=2.2.1",
         "tensorboardX",
+        "protobuf<5",
         "setproctitle",
     ],
     classifiers=[

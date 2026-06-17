@@ -91,6 +91,25 @@ python examples/summarize_overcooked_results.py \
   --pantheon-root /workspace/PantheonRL/results
 ```
 
+To watch a trained HAD3QN team play in PantheonRL's browser renderer, export
+one deterministic episode and launch the replay viewer:
+
+```shell
+python examples/export_overcooked_had3qn_replay.py \
+  --run-dir <run-directory> \
+  --device cpu
+
+cd /workspace/PantheonRL
+/root/miniforge3/envs/pantheonrl/bin/python \
+  overcookedgym/overcooked-flask/app.py \
+  --replay_json <run-directory>/replay.json
+```
+
+Open `http://127.0.0.1:5000/`. The replay starts automatically. Press space
+to pause or resume, and use the left and right arrow keys to inspect steps. If
+VS Code is connected to a remote container, forward port `5000` in its Ports
+panel before opening the URL.
+
 **Install Dependencies of Bi-DexterousHands**
 
 Bi-DexterousHands depend on IsaacGym. The hardware requirements of IsaacGym has to be satisfied. To install IsaacGym, download IsaacGym Preview 4 release from [its official website](https://developer.nvidia.com/isaac-gym/download). Then run `pip install -e .` under its `python` folder.
