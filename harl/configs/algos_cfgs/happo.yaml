@@ -4,6 +4,8 @@ seed:
   seed_specify: True
   # seed
   seed: 1
+  # optional offset used to initialize actor agent i with seed + i * offset
+  agent_seed_offset:
 device:
   # whether to use CUDA
   cuda: True
@@ -50,6 +52,8 @@ model:
   activation_func: relu
   # whether to use feature normalization
   use_feature_normalization: True
+  # whether to use LayerNorm after each hidden MLP layer
+  use_hidden_layernorm: True
   # initialization method for network parameters, choose from xavier_uniform_, orthogonal_, ...
   initialization_method: orthogonal_
   # gain of the output layer of the network.

@@ -5,7 +5,14 @@ from harl.utils.models_tools import init, get_active_func, get_init_method
 
 
 class MLPLayer(nn.Module):
-    def __init__(self, input_dim, hidden_sizes, initialization_method, activation_func):
+    def __init__(
+        self,
+        input_dim,
+        hidden_sizes,
+        initialization_method,
+        activation_func,
+        use_hidden_layernorm=True,
+    ):
         """Initialize the MLP layer.
         Args:
             input_dim: (int) input dimension.
@@ -22,18 +29,17 @@ class MLPLayer(nn.Module):
         def init_(m):
             return init(m, init_method, lambda x: nn.init.constant_(x, 0), gain=gain)
 
-        layers = [
-            init_(nn.Linear(input_dim, hidden_sizes[0])),
-            active_func,
-            nn.LayerNorm(hidden_sizes[0]),
-        ]
+        layers = [init_(nn.Linear(input_dim, hidden_sizes[0])), active_func]
+        if use_hidden_layernorm:
+            layers.append(nn.LayerNorm(hidden_sizes[0]))
 
         for i in range(1, len(hidden_sizes)):
             layers += [
                 init_(nn.Linear(hidden_sizes[i - 1], hidden_sizes[i])),
                 active_func,
-                nn.LayerNorm(hidden_sizes[i]),
             ]
+            if use_hidden_layernorm:
+                layers.append(nn.LayerNorm(hidden_sizes[i]))
 
         self.fc = nn.Sequential(*layers)
 
@@ -48,6 +54,7 @@ class MLPBase(nn.Module):
         super(MLPBase, self).__init__()
 
         self.use_feature_normalization = args["use_feature_normalization"]
+        self.use_hidden_layernorm = args.get("use_hidden_layernorm", True)
         self.initialization_method = args["initialization_method"]
         self.activation_func = args["activation_func"]
         self.hidden_sizes = args["hidden_sizes"]
@@ -58,7 +65,11 @@ class MLPBase(nn.Module):
             self.feature_norm = nn.LayerNorm(obs_dim)
 
         self.mlp = MLPLayer(
-            obs_dim, self.hidden_sizes, self.initialization_method, self.activation_func
+            obs_dim,
+            self.hidden_sizes,
+            self.initialization_method,
+            self.activation_func,
+            self.use_hidden_layernorm,
         )
 
     def forward(self, x):

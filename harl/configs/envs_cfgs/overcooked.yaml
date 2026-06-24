@@ -1,5 +1,9 @@
 layout_name: random0
 horizon: 400
 state_type: EP
-custom_dense_reward: true
-custom_shaping_scale: 2.0
+custom_dense_reward: false
+custom_shaping_gamma: 0.99
+custom_shaping_scale: 1.2
+custom_shaping_extra_scale_v2:
+custom_shaping_version: 1
+custom_shaping_version_switch_step:

@@ -6,6 +6,56 @@ import yaml
 from uu import Error
 
 
+class NoOpSummaryWriter:
+    """SummaryWriter fallback for environments without TensorBoard packages."""
+
+    def add_scalar(self, *args, **kwargs):
+        pass
+
+    def add_scalars(self, *args, **kwargs):
+        pass
+
+    def export_scalars_to_json(self, *args, **kwargs):
+        pass
+
+    def close(self):
+        pass
+
+
+class SummaryWriterCompat:
+    """Expose the tensorboardX methods HARL expects."""
+
+    def __init__(self, writer):
+        self.writer = writer
+
+    def add_scalar(self, *args, **kwargs):
+        return self.writer.add_scalar(*args, **kwargs)
+
+    def add_scalars(self, *args, **kwargs):
+        return self.writer.add_scalars(*args, **kwargs)
+
+    def export_scalars_to_json(self, *args, **kwargs):
+        export = getattr(self.writer, "export_scalars_to_json", None)
+        if export is not None:
+            return export(*args, **kwargs)
+        return None
+
+    def close(self):
+        return self.writer.close()
+
+
+def make_summary_writer(log_path):
+    """Create a TensorBoard writer when available, otherwise a no-op writer."""
+    try:
+        from tensorboardX import SummaryWriter
+    except ImportError:
+        try:
+            from torch.utils.tensorboard import SummaryWriter
+        except ImportError:
+            return NoOpSummaryWriter()
+    return SummaryWriterCompat(SummaryWriter(log_path))
+
+
 def get_defaults_yaml_args(algo, env):
     """Load config file for user-specified algo and env.
     Args:
@@ -85,9 +135,7 @@ def init_dir(env, env_args, algo, exp_name, seed, logger_path):
     )
     log_path = os.path.join(results_path, "logs")
     os.makedirs(log_path, exist_ok=True)
-    from tensorboardX import SummaryWriter
-
-    writter = SummaryWriter(log_path)
+    writter = make_summary_writer(log_path)
     models_path = os.path.join(results_path, "models")
     os.makedirs(models_path, exist_ok=True)
     return results_path, log_path, models_path, writter

@@ -4,7 +4,14 @@ import os
 import time
 import torch
 import numpy as np
-import setproctitle
+try:
+    import setproctitle
+except ImportError:
+    class setproctitle:
+        @staticmethod
+        def setproctitle(_title):
+            pass
+
 from harl.common.valuenorm import ValueNorm
 from torch.distributions import Categorical
 from harl.utils.trans_tools import _t2n

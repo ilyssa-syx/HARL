@@ -3,7 +3,14 @@
 import time
 import numpy as np
 import torch
-import setproctitle
+try:
+    import setproctitle
+except ImportError:
+    class setproctitle:
+        @staticmethod
+        def setproctitle(_title):
+            pass
+
 from harl.common.valuenorm import ValueNorm
 from harl.common.buffers.on_policy_actor_buffer import OnPolicyActorBuffer
 from harl.common.buffers.on_policy_critic_buffer_ep import OnPolicyCriticBufferEP
@@ -96,6 +103,7 @@ class OnPolicyBaseRunner:
         # actor
         if self.share_param:
             self.actor = []
+            set_seed(self._agent_seed_args(0))
             agent = ALGO_REGISTRY[args["algo"]](
                 {**algo_args["model"], **algo_args["algo"]},
                 self.envs.observation_space[0],
@@ -115,6 +123,7 @@ class OnPolicyBaseRunner:
         else:
             self.actor = []
             for agent_id in range(self.num_agents):
+                set_seed(self._agent_seed_args(agent_id))
                 agent = ALGO_REGISTRY[args["algo"]](
                     {**algo_args["model"], **algo_args["algo"]},
                     self.envs.observation_space[agent_id],
@@ -122,6 +131,7 @@ class OnPolicyBaseRunner:
                     device=self.device,
                 )
                 self.actor.append(agent)
+        set_seed(algo_args["seed"])
 
         if self.algo_args["render"]["use_render"] is False:  # train, not render
             self.actor_buffer = []
@@ -167,6 +177,17 @@ class OnPolicyBaseRunner:
             )
         if self.algo_args["train"]["model_dir"] is not None:  # restore model
             self.restore()
+
+    def _agent_seed_args(self, agent_id):
+        """Return seed args for initializing one agent's actor."""
+        seed_args = dict(self.algo_args["seed"])
+        agent_seed_offset = seed_args.get("agent_seed_offset", None)
+        if agent_seed_offset is not None:
+            seed_args["seed_specify"] = True
+            seed_args["seed"] = int(seed_args["seed"]) + int(agent_seed_offset) * int(
+                agent_id
+            )
+        return seed_args
 
     def run(self):
         """Run the training (or rendering) pipeline."""

@@ -14,7 +14,15 @@ LAYOUTS = ["simple", "unident_s", "random1", "random0", "random3"]
 
 
 class OvercookedEnvTest(unittest.TestCase):
-    def make_env(self, layout="simple", horizon=400, custom_dense_reward=False):
+    def make_env(
+        self,
+        layout="simple",
+        horizon=400,
+        custom_dense_reward=False,
+        custom_shaping_version=1,
+        custom_shaping_extra_scale_v2=None,
+        custom_shaping_version_switch_step=None,
+    ):
         return OvercookedEnv(
             {
                 "layout_name": layout,
@@ -22,11 +30,16 @@ class OvercookedEnvTest(unittest.TestCase):
                 "state_type": "EP",
                 "custom_dense_reward": custom_dense_reward,
                 "custom_shaping_gamma": 0.99,
-                "custom_shaping_scale": 0.4,
+                "custom_shaping_scale": 1.2,
+                "custom_shaping_extra_scale_v2": custom_shaping_extra_scale_v2,
+                "custom_shaping_version": custom_shaping_version,
+                "custom_shaping_version_switch_step": (
+                    custom_shaping_version_switch_step
+                ),
             }
         )
 
-    def state_with(self, env, held=None, counter=None, pot=None):
+    def state_with(self, env, held=None, counter=None, counter_pos=None, pot=None):
         state = env.mdp.get_standard_start_state()
         if held is not None:
             held_state = (
@@ -38,7 +51,8 @@ class OvercookedEnvTest(unittest.TestCase):
                 ObjectState(held, state.players[0].position, held_state)
             )
         if counter is not None:
-            counter_pos = env.mdp.get_counter_locations()[0]
+            if counter_pos is None:
+                counter_pos = env.mdp.get_counter_locations()[0]
             counter_state = (
                 ("onion", env.mdp.num_items_for_soup, env.mdp.soup_cooking_time)
                 if counter == "soup"
@@ -124,7 +138,150 @@ class OvercookedEnvTest(unittest.TestCase):
         try:
             state = self.state_with(env, pot=(2, 0))
             shaping = env._calculate_custom_shaping(state, state, False)
-            self.assertAlmostEqual(shaping, 0.4 * (0.99 * 3.0 - 3.0))
+            self.assertAlmostEqual(shaping, 1.2 * (0.99 * 0.6 - 0.6))
+        finally:
+            env.close()
+
+    def test_throughput_potential_rewards_late_stage_progress(self):
+        env = self.make_env(custom_dense_reward=True)
+        try:
+            cooking_time = env.mdp.soup_cooking_time
+            pot_pos = env.mdp.get_pot_locations()[0]
+            held_soup_state = self.state_with(env, held="soup")
+            held_soup_distance = env._nearest_distance(
+                held_soup_state.players[0].position,
+                env.mdp.get_serving_locations(),
+            )
+            ready_state = self.state_with(
+                env, held="dish", pot=(3, cooking_time)
+            )
+            dish_to_ready_pot_distance = env._nearest_distance(
+                ready_state.players[0].position,
+                env._ready_soup_positions(ready_state),
+            )
+
+            self.assertAlmostEqual(
+                env._potential(self.state_with(env, pot=(1, 0))), 0.3
+            )
+            self.assertAlmostEqual(
+                env._potential(self.state_with(env, pot=(2, 0))), 0.6
+            )
+            self.assertAlmostEqual(
+                env._potential(self.state_with(env, pot=(3, 1))), 1.0
+            )
+            self.assertAlmostEqual(
+                env._potential(self.state_with(env, pot=(3, cooking_time))),
+                1.2,
+            )
+            self.assertAlmostEqual(
+                env._potential(ready_state),
+                1.5 - 0.03 * dish_to_ready_pot_distance,
+            )
+            self.assertAlmostEqual(
+                env._potential(held_soup_state),
+                2.0 - 0.05 * held_soup_distance,
+            )
+
+            env.ready_soup_ages = {pot_pos: 10}
+            self.assertAlmostEqual(
+                env._potential(ready_state),
+                1.5 - 0.03 * dish_to_ready_pot_distance,
+            )
+        finally:
+            env.close()
+
+    def test_custom_shaping_is_disabled_by_default(self):
+        env = self.make_env()
+        try:
+            prev_state = self.state_with(env, held="onion")
+            next_state = self.state_with(env, pot=(1, 0))
+            self.assertEqual(
+                env._calculate_custom_shaping(prev_state, next_state, False),
+                0.0,
+            )
+        finally:
+            env.close()
+
+    def test_stale_penalty_is_v2_extra_only(self):
+        env = self.make_env(custom_dense_reward=True, custom_shaping_version=2)
+        try:
+            cooking_time = env.mdp.soup_cooking_time
+            pot_pos = env.mdp.get_pot_locations()[0]
+            ready_state = self.state_with(
+                env, held="dish", pot=(3, cooking_time)
+            )
+            dish_to_ready_pot_distance = env._nearest_distance(
+                ready_state.players[0].position,
+                env._ready_soup_positions(ready_state),
+            )
+
+            env.ready_soup_ages = {pot_pos: 10}
+
+            self.assertAlmostEqual(
+                env._potential(ready_state),
+                1.5 - 0.03 * dish_to_ready_pot_distance,
+            )
+            self.assertAlmostEqual(env._potential_v2_extra(ready_state), -0.25)
+
+            held_state = self.state_with(env, held="soup")
+            env.held_soup_ages = {0: 100}
+            self.assertAlmostEqual(env._potential_v2_extra(held_state), -0.4)
+        finally:
+            env.close()
+
+    def test_custom_shaping_can_switch_to_v2_extra_scale(self):
+        env = self.make_env(
+            custom_dense_reward=True,
+            custom_shaping_version=1,
+            custom_shaping_extra_scale_v2=3.0,
+            custom_shaping_version_switch_step=10,
+            layout="random0",
+        )
+        try:
+            if not env.non_edge_counters:
+                self.skipTest("random0 layout has no non-edge counters")
+            counter_pos = next(iter(env.non_edge_counters))
+            prev_state = self.state_with(env)
+            next_state = self.state_with(
+                env, counter="soup", counter_pos=counter_pos
+            )
+            prev_base_phi = env._potential(prev_state)
+            next_base_phi = env._potential(next_state)
+            prev_extra_phi = env._potential_v2_extra(prev_state)
+            next_extra_phi = env._potential_v2_extra(next_state)
+
+            self.assertEqual(env._active_custom_shaping_version(), 1)
+            self.assertAlmostEqual(
+                env._calculate_custom_shaping(prev_state, next_state, False),
+                1.2 * (0.99 * next_base_phi - prev_base_phi),
+            )
+            env.custom_shaping_elapsed_steps = 10
+            self.assertEqual(env._active_custom_shaping_version(), 2)
+            self.assertAlmostEqual(
+                env._calculate_custom_shaping(prev_state, next_state, False),
+                1.2 * (0.99 * next_base_phi - prev_base_phi)
+                + 3.0 * (0.99 * next_extra_phi - prev_extra_phi),
+            )
+        finally:
+            env.close()
+
+    def test_useless_interact_penalty_caps_per_agent(self):
+        env = self.make_env(custom_dense_reward=True, custom_shaping_version=2)
+        try:
+            state = self.state_with(env, held="soup")
+            penalties = [
+                env._calculate_useless_interact_penalty(
+                    state,
+                    state,
+                    (Action.INTERACT, Action.STAY),
+                    0.0,
+                )
+                for _ in range(20)
+            ]
+
+            self.assertAlmostEqual(penalties[0], -0.05)
+            self.assertAlmostEqual(sum(penalties), -0.5)
+            self.assertAlmostEqual(penalties[-1], 0.0)
         finally:
             env.close()
 
@@ -154,19 +311,19 @@ class OvercookedEnvTest(unittest.TestCase):
         try:
             prev_state = self.state_with(env, held="onion")
             next_state = self.state_with(env, pot=(1, 0))
-            prev_phi = 1.0
-            next_phi = 2.0
+            prev_phi = 0.0
+            next_phi = 0.3
             self.assertAlmostEqual(
                 env._calculate_custom_shaping(prev_state, next_state, False),
-                0.4 * (0.99 * next_phi - prev_phi),
+                1.2 * (0.99 * next_phi - prev_phi),
             )
             self.assertAlmostEqual(
                 env._calculate_custom_shaping(prev_state, next_state, True),
-                0.4 * (0.99 * next_phi - prev_phi),
+                1.2 * (0.99 * next_phi - prev_phi),
             )
             self.assertAlmostEqual(
                 env._calculate_custom_shaping(next_state, prev_state, False),
-                0.4 * (0.99 * prev_phi - next_phi),
+                1.2 * (0.99 * prev_phi - next_phi),
             )
         finally:
             env.close()
@@ -189,7 +346,7 @@ class OvercookedEnvTest(unittest.TestCase):
         finally:
             env.close()
 
-        custom_reward = 0.4 * (0.99 * 2.0 - 1.0)
+        custom_reward = 1.2 * (0.99 * 0.3 - 0.0)
         self.assertTrue(np.all(dones))
         np.testing.assert_allclose(
             rewards, [[23.0 + custom_reward], [23.0 + custom_reward]]
